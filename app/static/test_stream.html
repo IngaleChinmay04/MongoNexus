@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>MongoDB Stream Test</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+      }
+      #results {
+        margin-top: 20px;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        min-height: 200px;
+        max-height: 500px;
+        overflow-y: auto;
+      }
+      pre {
+        background-color: #f5f5f5;
+        padding: 10px;
+        border-radius: 5px;
+        white-space: pre-wrap;
+      }
+      .event {
+        margin-bottom: 10px;
+        padding: 8px;
+        border-radius: 4px;
+      }
+      .metadata {
+        background-color: #e3f2fd;
+      }
+      .batch {
+        background-color: #f1f8e9;
+      }
+      .complete {
+        background-color: #e8f5e9;
+        font-weight: bold;
+      }
+      .error {
+        background-color: #ffebee;
+        color: #c62828;
+      }
+      button {
+        padding: 8px 16px;
+        background-color: #4caf50;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        margin-right: 10px;
+      }
+      input,
+      select {
+        padding: 8px;
+        margin: 5px 0;
+        border-radius: 4px;
+        border: 1px solid #ddd;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>MongoDB Stream Test</h1>
+
+    <div>
+      <label for="dbName">Database Name:</label>
+      <input type="text" id="dbName" value="open-source-web-app" />
+    </div>
+
+    <div>
+      <label for="collectionName">Collection Name:</label>
+      <input type="text" id="collectionName" value="users" />
+    </div>
+
+    <div>
+      <label for="endpoint">Endpoint:</label>
+      <select id="endpoint">
+        <option value="find">find</option>
+        <option value="aggregate">aggregate</option>
+      </select>
+    </div>
+
+    <div>
+      <label for="filterQuery">Filter Query (JSON):</label>
+      <input type="text" id="filterQuery" value="{}" style="width: 300px" />
+    </div>
+
+    <div>
+      <label for="batchSize">Batch Size:</label>
+      <input type="number" id="batchSize" value="10" min="1" max="100" />
+    </div>
+
+    <div style="margin-top: 10px">
+      <button id="startStream">Start Stream</button>
+      <button id="stopStream">Stop Stream</button>
+      <button id="clearResults">Clear Results</button>
+    </div>
+
+    <div>
+      <h2>Events</h2>
+      <div id="status"></div>
+      <div id="results"></div>
+    </div>
+
+    <script>
+      let eventSource;
+      let totalDocs = 0;
+      let receivedDocs = 0;
+
+      document
+        .getElementById("startStream")
+        .addEventListener("click", function () {
+          // Close existing connection if any
+          if (eventSource) {
+            eventSource.close();
+          }
+
+          const dbName = document.getElementById("dbName").value.trim();
+          const collectionName = document
+            .getElementById("collectionName")
+            .value.trim();
+          const endpoint = document.getElementById("endpoint").value;
+          const batchSize = parseInt(
+            document.getElementById("batchSize").value
+          );
+          const filterQueryStr = document.getElementById("filterQuery").value;
+          let filterQuery = {};
+
+          try {
+            filterQuery = JSON.parse(filterQueryStr);
+          } catch (e) {
+            alert("Invalid JSON in filter query");
+            return;
+          }
+
+          document.getElementById(
+            "status"
+          ).innerHTML = `<p>Connecting to stream...</p>`;
+
+          // Prepare the request payload
+          const payload = {
+            db_name: dbName,
+            collection_name: collectionName,
+            filter: filterQuery,
+            limit: 1000,
+          };
+
+          // For aggregate endpoint, we need a pipeline
+          if (endpoint === "aggregate") {
+            payload.pipeline = [{ $match: filterQuery }, { $limit: 1000 }];
+          }
+
+          // Create an EventSource object for SSE
+          const url = `http://localhost:8000/mcp/mongo/stream/${endpoint}?batch_size=${batchSize}`;
+
+          // We need to use fetch for POST with SSE
+          fetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          })
+            .then((response) => {
+              if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+              }
+              const reader = response.body.getReader();
+              const decoder = new TextDecoder();
+              let buffer = "";
+
+              function processStream() {
+                return reader.read().then(({ value, done }) => {
+                  if (done) {
+                    console.log("Stream complete");
+                    return;
+                  }
+
+                  // Append new data to buffer
+                  buffer += decoder.decode(value, { stream: true });
+
+                  // Process each complete event in the buffer
+                  const events = buffer.split("\n\n");
+                  buffer = events.pop(); // Keep the last incomplete event in buffer
+
+                  events.forEach((event) => {
+                    if (!event.trim()) return;
+
+                    const lines = event.split("\n");
+                    let eventType = "message";
+                    let data = "";
+
+                    lines.forEach((line) => {
+                      if (line.startsWith("event:")) {
+                        eventType = line.substring(6).trim();
+                      } else if (line.startsWith("data:")) {
+                        data += line.substring(5).trim();
+                      }
+                    });
+
+                    try {
+                      const parsedData = JSON.parse(data);
+                      handleEvent(eventType, parsedData);
+                    } catch (e) {
+                      console.error("Error parsing event data", e, data);
+                    }
+                  });
+
+                  return processStream();
+                });
+              }
+
+              processStream().catch((err) => {
+                console.error("Stream error:", err);
+                document.getElementById(
+                  "status"
+                ).innerHTML += `<p style="color:red">Error: ${err.message}</p>`;
+              });
+            })
+            .catch((err) => {
+              console.error("Fetch error:", err);
+              document.getElementById(
+                "status"
+              ).innerHTML = `<p style="color:red">Error: ${err.message}</p>`;
+            });
+        });
+
+      function handleEvent(eventType, data) {
+        const resultsDiv = document.getElementById("results");
+
+        const eventDiv = document.createElement("div");
+        eventDiv.className = `event ${eventType}`;
+
+        // Format based on event type
+        if (eventType === "metadata") {
+          totalDocs = data.total_count || 0;
+          eventDiv.innerHTML = `<strong>Metadata:</strong> Database: ${data.database}, Collection: ${data.collection}, Total documents: ${data.total_count}`;
+          document.getElementById(
+            "status"
+          ).innerHTML = `<p>Connected. Expecting ${totalDocs} documents.</p>`;
+        } else if (eventType === "batch") {
+          receivedDocs += data.batch_size;
+          const progress =
+            totalDocs > 0 ? Math.round((receivedDocs / totalDocs) * 100) : 0;
+
+          document.getElementById(
+            "status"
+          ).innerHTML = `<p>Progress: ${progress}% (${receivedDocs}/${totalDocs} documents)</p>`;
+
+          eventDiv.innerHTML = `<strong>Batch:</strong> Received ${
+            data.batch_size
+          } documents (total: ${data.count})
+                <pre>${JSON.stringify(data.batch[0], null, 2)}...</pre>`;
+        } else if (eventType === "complete") {
+          eventDiv.innerHTML = `<strong>Complete:</strong> Received total of ${data.total_count} documents`;
+          document.getElementById(
+            "status"
+          ).innerHTML = `<p>Complete. Received ${data.total_count} documents.</p>`;
+        } else if (eventType === "error") {
+          eventDiv.innerHTML = `<strong>Error:</strong> ${data.message}`;
+          document.getElementById(
+            "status"
+          ).innerHTML = `<p style="color:red">Error: ${data.message}</p>`;
+        } else {
+          eventDiv.innerHTML = `<strong>${eventType}:</strong> <pre>${JSON.stringify(
+            data,
+            null,
+            2
+          )}</pre>`;
+        }
+
+        resultsDiv.appendChild(eventDiv);
+        resultsDiv.scrollTop = resultsDiv.scrollHeight; // Scroll to bottom
+      }
+
+      document
+        .getElementById("stopStream")
+        .addEventListener("click", function () {
+          if (eventSource) {
+            eventSource.close();
+            document.getElementById(
+              "status"
+            ).innerHTML += `<p>Stream closed by user.</p>`;
+          }
+        });
+
+      document
+        .getElementById("clearResults")
+        .addEventListener("click", function () {
+          document.getElementById("results").innerHTML = "";
+          document.getElementById("status").innerHTML = "";
+          receivedDocs = 0;
+          totalDocs = 0;
+        });
+    </script>
+  </body>
+</html>

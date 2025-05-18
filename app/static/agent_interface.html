@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>MongoDB Agent Interface</title>
+    <style>
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background-color: #f9f9f9;
+      }
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        background-color: #fff;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        padding: 20px;
+      }
+      h1 {
+        color: #333;
+        margin-bottom: 20px;
+      }
+      .input-group {
+        margin-bottom: 15px;
+      }
+      label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: 500;
+        color: #555;
+      }
+      input[type="text"] {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 16px;
+        box-sizing: border-box;
+      }
+      textarea {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 16px;
+        box-sizing: border-box;
+        min-height: 100px;
+        resize: vertical;
+      }
+      button {
+        background-color: #4caf50;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        text-align: center;
+        text-decoration: none;
+        display: inline-block;
+        font-size: 16px;
+        margin: 4px 2px;
+        transition-duration: 0.4s;
+        cursor: pointer;
+        border-radius: 4px;
+      }
+      button:hover {
+        background-color: #45a049;
+      }
+      .results {
+        margin-top: 20px;
+        padding: 20px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        background-color: #f9f9f9;
+      }
+      .explanation {
+        margin-bottom: 20px;
+        padding-bottom: 15px;
+        border-bottom: 1px solid #eee;
+      }
+      .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 15px;
+      }
+      .data-table th {
+        background-color: #f2f2f2;
+        text-align: left;
+        padding: 8px;
+      }
+      .data-table td {
+        border: 1px solid #ddd;
+        padding: 8px;
+      }
+      .data-table tr:nth-child(even) {
+        background-color: #f9f9f9;
+      }
+      .json-view {
+        font-family: monospace;
+        white-space: pre-wrap;
+        background-color: #f5f5f5;
+        padding: 10px;
+        border-radius: 4px;
+        max-height: 400px;
+        overflow: auto;
+      }
+      .tabs {
+        display: flex;
+        margin-top: 20px;
+        border-bottom: 1px solid #ddd;
+      }
+      .tab {
+        padding: 10px 20px;
+        cursor: pointer;
+        margin-right: 5px;
+        border: 1px solid #ddd;
+        border-bottom: none;
+        border-radius: 5px 5px 0 0;
+        background-color: #f2f2f2;
+      }
+      .tab.active {
+        background-color: white;
+        border-bottom: 1px solid white;
+        margin-bottom: -1px;
+      }
+      .tab-content {
+        display: none;
+        padding: 20px;
+        border: 1px solid #ddd;
+        border-top: none;
+        border-radius: 0 0 5px 5px;
+      }
+      .tab-content.active {
+        display: block;
+      }
+      .loading {
+        text-align: center;
+        padding: 20px;
+      }
+      .loader {
+        border: 4px solid #f3f3f3;
+        border-radius: 50%;
+        border-top: 4px solid #3498db;
+        width: 30px;
+        height: 30px;
+        animation: spin 2s linear infinite;
+        margin: 0 auto;
+      }
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>MongoDB Agent Interface</h1>
+
+      <div class="input-group">
+        <label for="dbName">Database Name:</label>
+        <input type="text" id="dbName" placeholder="Enter database name" />
+      </div>
+
+      <div class="input-group">
+        <label for="query">Natural Language Query:</label>
+        <textarea
+          id="query"
+          placeholder="Example: Show me all active users who signed up this month"
+        ></textarea>
+      </div>
+
+      <button id="submitQuery">Submit Query</button>
+      <button id="resetForm">Reset</button>
+
+      <div id="loading" class="loading" style="display: none">
+        <p>Processing your query...</p>
+        <div class="loader"></div>
+      </div>
+
+      <div id="results" class="results" style="display: none">
+        <h2>Results</h2>
+
+        <div class="tabs">
+          <div class="tab active" data-tab="explanation">Explanation</div>
+          <div class="tab" data-tab="table">Table View</div>
+          <div class="tab" data-tab="raw">Raw JSON</div>
+          <div class="tab" data-tab="query">MongoDB Query</div>
+        </div>
+
+        <div id="explanation" class="tab-content active">
+          <div id="explanationText"></div>
+        </div>
+
+        <div id="table" class="tab-content">
+          <div id="tableView"></div>
+        </div>
+
+        <div id="raw" class="tab-content">
+          <div id="rawJson" class="json-view"></div>
+        </div>
+
+        <div id="query" class="tab-content">
+          <div id="queryJson" class="json-view"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      document.addEventListener("DOMContentLoaded", function () {
+        // Tab switching
+        document.querySelectorAll(".tab").forEach((tab) => {
+          tab.addEventListener("click", function () {
+            // Remove active class from all tabs
+            document.querySelectorAll(".tab").forEach((t) => {
+              t.classList.remove("active");
+            });
+
+            // Remove active class from all tab contents
+            document.querySelectorAll(".tab-content").forEach((content) => {
+              content.classList.remove("active");
+            });
+
+            // Add active class to current tab
+            this.classList.add("active");
+
+            // Show the content for the current tab
+            const tabId = this.getAttribute("data-tab");
+            document.getElementById(tabId).classList.add("active");
+          });
+        });
+
+        // Handle form submission
+        document
+          .getElementById("submitQuery")
+          .addEventListener("click", async function () {
+            const dbName = document.getElementById("dbName").value.trim();
+            const query = document.getElementById("query").value.trim();
+
+            if (!dbName || !query) {
+              alert("Please enter both database name and query");
+              return;
+            }
+
+            // Show loading indicator
+            document.getElementById("loading").style.display = "block";
+            document.getElementById("results").style.display = "none";
+
+            try {
+              const response = await fetch("/agent/query", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  db_name: dbName,
+                  query: query,
+                }),
+              });
+
+              if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+              }
+
+              const data = await response.json();
+
+              // Process and display the results
+              document.getElementById("explanationText").innerHTML =
+                data.explanation;
+              document.getElementById("rawJson").textContent = JSON.stringify(
+                data.results,
+                null,
+                2
+              );
+              document.getElementById("queryJson").textContent = JSON.stringify(
+                data.mongo_query,
+                null,
+                2
+              );
+
+              // Generate table view if there are results
+              const tableView = document.getElementById("tableView");
+              tableView.innerHTML = "";
+
+              if (data.results && data.results.length > 0) {
+                // Extract all unique keys from all objects
+                const keys = new Set();
+                data.results.forEach((result) => {
+                  Object.keys(result).forEach((key) => keys.add(key));
+                });
+
+                // Create table
+                const table = document.createElement("table");
+                table.className = "data-table";
+
+                // Create table header
+                const thead = document.createElement("thead");
+                const headerRow = document.createElement("tr");
+
+                keys.forEach((key) => {
+                  const th = document.createElement("th");
+                  th.textContent = key;
+                  headerRow.appendChild(th);
+                });
+
+                thead.appendChild(headerRow);
+                table.appendChild(thead);
+
+                // Create table body
+                const tbody = document.createElement("tbody");
+
+                data.results.forEach((result) => {
+                  const row = document.createElement("tr");
+
+                  keys.forEach((key) => {
+                    const td = document.createElement("td");
+
+                    if (result[key] === undefined) {
+                      td.textContent = "";
+                    } else if (typeof result[key] === "object") {
+                      td.textContent = JSON.stringify(result[key]);
+                    } else {
+                      td.textContent = result[key];
+                    }
+
+                    row.appendChild(td);
+                  });
+
+                  tbody.appendChild(row);
+                });
+
+                table.appendChild(tbody);
+                tableView.appendChild(table);
+              } else {
+                tableView.innerHTML = "<p>No results found</p>";
+              }
+
+              // Show results
+              document.getElementById("loading").style.display = "none";
+              document.getElementById("results").style.display = "block";
+            } catch (error) {
+              console.error("Error:", error);
+              alert("Error processing query: " + error.message);
+              document.getElementById("loading").style.display = "none";
+            }
+          });
+
+        // Handle form reset
+        document
+          .getElementById("resetForm")
+          .addEventListener("click", function () {
+            document.getElementById("dbName").value = "";
+            document.getElementById("query").value = "";
+            document.getElementById("results").style.display = "none";
+          });
+      });
+    </script>
+  </body>
+</html>
