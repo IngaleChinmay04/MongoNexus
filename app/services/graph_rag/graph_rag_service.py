@@ -4,6 +4,7 @@ Coordinates knowledge graph, vector store, and MongoDB operations.
 """
 import logging
 import os
+import re
 from typing import Dict, List, Any, Optional, Tuple
 import httpx
 import json
@@ -225,43 +226,42 @@ class GraphRAGService:
     
     async def execute_enhanced_query(self, query_params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute an enhanced MongoDB query.
-        
-        Args:
-            query_params: Enhanced MongoDB query parameters
-            
-        Returns:
-            Query results
+        Execute an enhanced MongoDB query, applying case-insensitive search for string filters.
         """
-        # Remove metadata from the query params before sending
-        params_to_send = {k: v for k, v in query_params.items() if not k.startswith('_')}
+        if 'filter' in query_params and isinstance(query_params['filter'], dict):
+            original_filter = query_params['filter']
+            new_filter_conditions = {}
+            for field, condition in original_filter.items():
+                if isinstance(condition, str):
+                    # Apply case-insensitive regex for simple string equality
+                    new_filter_conditions[field] = {'$regex': re.escape(condition), '$options': 'i'}
+                elif isinstance(condition, dict) and '$in' in condition and \
+                     isinstance(condition['$in'], list) and len(condition['$in']) == 1 and \
+                     isinstance(condition['$in'][0], str):
+                    # Handle {'field': {'$in': ['single_string_value']}}
+                    # Convert to case-insensitive regex match for the single string value
+                    new_filter_conditions[field] = {'$regex': re.escape(condition['$in'][0]), '$options': 'i'}
+                else:
+                    # Keep other conditions (e.g., numeric, boolean, other operators, more complex $in) as is
+                    new_filter_conditions[field] = condition
+            query_params['filter'] = new_filter_conditions
+
+        logger.info(f"Executing enhanced query with case-insensitivity: {json.dumps(query_params)}")
         
         try:
-            logger.info(f"Executing enhanced query: {json.dumps(params_to_send)}")
-            response = await self.client.post(
-                f"{self.base_url}/find",
-                json=params_to_send,
-                timeout=30.0
-            )
+            api_op = "find" # Default or determine from query_params
+            if query_params.get("_meta", {}).get("intent") == "count": # Example for count
+                 api_op = "count"
             
+            url = f"{self.base_url}/{api_op}"
+
+            response = await self.client.post(url, json=query_params)
             response.raise_for_status()
-            results = response.json()
-            
-            # Add enhancement metadata to results
-            if "_meta" in query_params:
-                results["_meta"] = query_params["_meta"]
-                
-            return results
-            
+            return response.json()
         except Exception as e:
-            logger.error(f"Error executing enhanced query: {str(e)}", exc_info=True)
-            return {
-                "results": [],
-                "error": str(e),
-                "collection_name": query_params.get("collection_name", ""),
-                "total_count": 0
-            }
-    
+            logger.error(f"Error executing enhanced query: {e}")
+            raise
+
     def generate_enhanced_explanation(self, query: str, query_params: Dict[str, Any], results: Dict[str, Any]) -> str:
         """
         Generate an enhanced natural language explanation of the query results.
